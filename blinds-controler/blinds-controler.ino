@@ -5,6 +5,8 @@
 #include <PubSubClient.h>         //MQTT
 #include <ESP8266mDNS.h>
 #include <ESP8266HTTPUpdateServer.h>
+#include <Wire.h>
+#include <Adafruit_BMP085.h>
 
 ////**********START CUSTOM PARAMS******************//
 
@@ -14,14 +16,19 @@ const char* update_path = "/WebFirmwareUpgrade";
 const char* update_username = "admin";
 const char* update_password = "secret";
 
+// OpenHab2 items
+//Switch Blinds {mqtt=">[broker:livingroom/blinds-button:command:ON:OPEN],>[broker:livingroom/blinds-button:command:OFF:CLOSED],<[broker:livingroom/blinds-status:state:ON:OPEN],<[broker:livingroom/blinds-status:state:OFF:CLOSED]"}
+
 //Define the pins
 #define RELAY_PIN 5
 #define DOOR_PIN 4
 
 //Define MQTT Params. If you don't need to 
 #define mqtt_server "192.168.0.6"
-#define door_topic "livingroom/blinds"
+#define door_topic "livingroom/blinds-status"
 #define button_topic "livingroom/blinds-button"
+#define temp_topic "livingroom/humidity"
+#define humidity_topic "livingroom/temperature"
 const char* mqtt_user = "pi"; 
 const char* mqtt_pass = "pi";
 
@@ -50,13 +57,27 @@ char* last_state = "";
 WiFiManager wifiManager;
 long lastMsg = 0;
 
+// BMP085
+Adafruit_BMP085 bmp;
+
 void setup() {
+
+  Serial.begin(115200);
+
+  if (!bmp.begin()) {
+    Serial.println("Could not find BMP180 or BMP085 sensor at 0x77");
+    while (1) {}
+  }
+
+  Serial.print("Temperature = ");
+  Serial.print(bmp.readTemperature());
+  Serial.println(" °C");
+  
   //Set Relay(output) and Door(input) pins
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(RELAY_PIN, LOW);
   pinMode(DOOR_PIN, INPUT);
-
-  Serial.begin(115200);
+  
 
   //Set the wifi config portal to only show for 3 minutes, then continue.
   wifiManager.setConfigPortalTimeout(180);
