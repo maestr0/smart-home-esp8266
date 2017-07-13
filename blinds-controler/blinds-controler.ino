@@ -250,18 +250,36 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if (blinds == "OPEN")
     {      
       Serial.println("Opening blinds ...");
-      delay(600);
     } else {
       Serial.print("Closing blinds...");
       }
-  }else if (strTopic == ac_ir_topic)
-  {
+  } else if (strTopic == ac_ir_topic) {
     acIr = String((char*)payload);
     if (acIr == "SWITCH")
     {      
       Serial.println("AC switch ...");
-      irsend.sendGC(Samsung_power_toggle, 71);
-      delay(600);
+      irsend.sendNEC(0x10AF8877, 32);
+    } 
+  } else if (strTopic == main_ir_topic) {
+    acIr = String((char*)payload);
+    if (acIr == "SPEAKER_BT") {      
+      Serial.println("SPEAKER BT");
+      irsend.sendNEC(0x8E7B24D, 32);
+    } else if (acIr == "SPEAKER_LINE_IN") {      
+      Serial.println("SPEAKER_LINE_IN");
+      irsend.sendNEC(0x8E77A85, 32);
+    } else if (acIr == "SPEAKER_VOLUME_UP") {      
+      Serial.println("SPEAKER_VOLUME_UP");
+      irsend.sendNEC(0x8E7D42B, 32);
+    } else if (acIr == "SPEAKER_VOLUME_DOWN") {      
+      Serial.println("SPEAKER_VOLUME_DOWN");
+      irsend.sendNEC(0x8E73CC3, 32);
+    } else if (acIr == "SPEAKER_MUTE") {      
+      Serial.println("SPEAKER_MUTE");
+      irsend.sendNEC(0x8E758A7, 32);
+    } else if (acIr == "TV_SWITCH") {      
+      Serial.println("TV_SWITCH");
+      irsend.sendSAMSUNG(0xE0E040BF, 32);
     } 
   }
 }
