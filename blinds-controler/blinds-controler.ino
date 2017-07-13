@@ -33,8 +33,10 @@ const char* update_password = "secret";
 #define mqtt_server "192.168.0.6"
 #define blinds_status_topic "livingroom/blinds-status"
 #define blinds_button_topic "livingroom/blinds-button"
-#define temp_topic "livingroom/temperature"
+#define temp_inside_topic "livingroom/temperature-inside"
 #define air_pressure_topic "livingroom/air-pressure"
+#define light_level_topic "livingroom/light-level"
+#define temp_outside_topic "livingroom/temperature-outside"
 const char* mqtt_user = "pi"; 
 const char* mqtt_pass = "pi";
 
@@ -87,6 +89,9 @@ DeviceAddress insideThermometer;
 int blinds_position = 0;
 int lastBlindsStatusUpdate = 0;
 int lastBlindsState = 0;
+
+// light level
+int lastMsgLightLevel = 0;
 
 void setup() {
 
@@ -192,8 +197,22 @@ void loop() {
   //checkBlindsState();
   checkTempAndPressure();
   checkBlindsPosition();
+  checkLightLevel();
   client.loop(); //the mqtt function that processes MQTT messages
   httpServer.handleClient(); //handles requests for the firmware update page
+}
+
+void checkLightLevel(){
+  //pub every minute, regardless of a change.
+  long now = millis();
+  if (now - lastMsgLightLevel > 10000) {
+    lastMsgLightLevel = now;        
+    float ll = analogRead(A0);    
+    String t3 = String(ll);
+    char tmp3[sizeof(t3)];    
+    t3.toCharArray(tmp3,sizeof(tmp3));
+    client.publish(light_level_topic, tmp3);  
+  }
 }
 
 void checkBlindsPosition(){
@@ -264,7 +283,7 @@ void checkTempAndPressure() {
       String t1 = String(t);
       char tmp1[sizeof(t1)];    
       t1.toCharArray(tmp1,sizeof(tmp1));
-      client.publish(temp_topic, tmp1);
+      client.publish(temp_inside_topic, tmp1);
     }
     
     float p = bmp.readPressure() / 100.0;
@@ -274,20 +293,18 @@ void checkTempAndPressure() {
       t2.toCharArray(tmp2,sizeof(tmp2));
       client.publish(air_pressure_topic, tmp2);
     }
-
-//    float extTemp = analogRead(A0)*5/1024.0;
-//    extTemp = extTemp - 0.5;
-//    extTemp = extTemp / 0.01;
-//    Serial.println(extTemp);
-
- // call sensors.requestTemperatures() to issue a global temperature 
-  // request to all devices on the bus
-  Serial.print("Requesting temperatures...");
-  sensors.requestTemperatures(); // Send the command to get temperatures
-  Serial.println("DONE");
   
-  // It responds almost immediately. Let's print out the data
-  printTemperature(insideThermometer); // Use a simple function to print out the data
+  sensors.requestTemperatures();
+  float to = sensors.getTempC(insideThermometer);
+  if(to < 100 && to > -30) {
+    String t3 = String(to);
+    char tmp3[sizeof(t3)];    
+    t3.toCharArray(tmp3,sizeof(tmp3));
+    client.publish(temp_outside_topic, tmp3);
+  }
+  
+//   It responds almost immediately. Let's print out the data
+//  printTemperature(insideThermometer); // Use a simple function to print out the data
   }
 }
 
