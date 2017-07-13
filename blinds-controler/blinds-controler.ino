@@ -9,7 +9,8 @@
 #include <Adafruit_BMP085.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-
+#include <IRsend.h>
+#include "IRController.h"
 
 ////**********START CUSTOM PARAMS******************//
 
@@ -23,22 +24,24 @@ const char* update_password = "secret";
 //Switch Blinds {mqtt=">[broker:livingroom/blinds-button:command:ON:OPEN],>[broker:livingroom/blinds-button:command:OFF:CLOSED],<[broker:livingroom/blinds-status:state:ON:OPEN],<[broker:livingroom/blinds-status:state:OFF:CLOSED]"}
 
 //Define the pins
-//#define RELAY_PIN 5
-//#define DOOR_PIN 4
 #define POSITION_SENSOR D3
 #define POSITION_LED D4
 
 
 //Define MQTT Params. If you don't need to 
 #define mqtt_server "192.168.0.6"
-#define blinds_status_topic "livingroom/blinds-status"
-#define blinds_button_topic "livingroom/blinds-button"
+
+#define blinds_status_topic "livingroom/blinds/status"
+#define blinds_switch_topic "livingroom/blinds/switch"
 #define temp_inside_topic "livingroom/temperature-inside"
 #define air_pressure_topic "livingroom/air-pressure"
 #define light_level_topic "livingroom/light-level"
 #define temp_outside_topic "livingroom/temperature-outside"
-const char* mqtt_user = "pi"; 
-const char* mqtt_pass = "pi";
+#define ac_ir_topic "livingroom/ac_ir/switch"
+#define main_ir_topic "livingroom/main_ir/switch"
+
+const char* mqtt_user = ""; 
+const char* mqtt_pass = "";
 
 //************END CUSTOM PARAMS********************//
 //This can be used to output the date the code was compiled
@@ -54,11 +57,14 @@ WiFiClient espClient;
 PubSubClient client(espClient);
 
 //Setup Variables
-String switch1;
+String blinds;
+String acIr;
+String mainIr;
+
 String strTopic;
 String strPayload;
-char* door_state = "UNDEFINED";
-char* last_state = "";
+//char* door_state = "UNDEFINED";
+//char* last_state = "";
 
 //Wifi Manager will try to connect to the saved AP. If that fails, it will start up as an AP
 //which you can connect to and setup the wifi
@@ -93,6 +99,9 @@ int lastBlindsState = 0;
 // light level
 int lastMsgLightLevel = 0;
 
+// IR
+IRsend irsend(D8);
+
 void setup() {
 
   Serial.begin(115200);
@@ -106,10 +115,8 @@ void setup() {
   Serial.print(bmp.readTemperature());
   Serial.println(" °C");
   
-  //Set Relay(output) and Door(input) pins
-//  pinMode(RELAY_PIN, OUTPUT);
-//  pinMode(RELAY_PIN, LOW);
-//  pinMode(DOOR_PIN, INPUT);
+  // IR
+  irsend.begin();
 
   // blinds position sensor
   pinMode(POSITION_LED, OUTPUT);  // set onboard LED as output
@@ -236,19 +243,26 @@ void checkBlindsPosition(){
 void callback(char* topic, byte* payload, unsigned int length) {  
   payload[length] = '\0';
   strTopic = String((char*)topic);
-  if (strTopic == blinds_button_topic)
+  Serial.print("Mqtt topic "); Serial.println(strTopic);
+  if (strTopic == blinds_switch_topic)
   {
-    switch1 = String((char*)payload);
-    if (switch1 == "OPEN")
-    {
-      //'click' the relay
-      Serial.println("ON");
-//      pinMode(RELAY_PIN, HIGH);
+    blinds = String((char*)payload);
+    if (blinds == "OPEN")
+    {      
+      Serial.println("Opening blinds ...");
       delay(600);
-//      pinMode(RELAY_PIN, LOW);
     } else {
-      Serial.print("Button topic val:"); Serial.println(switch1);
+      Serial.print("Closing blinds...");
       }
+  }else if (strTopic == ac_ir_topic)
+  {
+    acIr = String((char*)payload);
+    if (acIr == "SWITCH")
+    {      
+      Serial.println("AC switch ...");
+      irsend.sendGC(Samsung_power_toggle, 71);
+      delay(600);
+    } 
   }
 }
 
@@ -294,17 +308,14 @@ void checkTempAndPressure() {
       client.publish(air_pressure_topic, tmp2);
     }
   
-  sensors.requestTemperatures();
-  float to = sensors.getTempC(insideThermometer);
-  if(to < 100 && to > -30) {
-    String t3 = String(to);
-    char tmp3[sizeof(t3)];    
-    t3.toCharArray(tmp3,sizeof(tmp3));
-    client.publish(temp_outside_topic, tmp3);
-  }
-  
-//   It responds almost immediately. Let's print out the data
-//  printTemperature(insideThermometer); // Use a simple function to print out the data
+    sensors.requestTemperatures();
+    float to = sensors.getTempC(insideThermometer);
+    if(to < 100 && to > -30) {
+      String t3 = String(to);
+      char tmp3[sizeof(t3)];    
+      t3.toCharArray(tmp3,sizeof(tmp3));
+      client.publish(temp_outside_topic, tmp3);
+    }  
   }
 }
 
@@ -314,7 +325,9 @@ void reconnect() {
   Serial.print("Attempting MQTT connection...");
   if (client.connect(host, mqtt_user, mqtt_pass)) {
     Serial.println("connected");
-    client.subscribe("livingroom/#");
+    client.subscribe(blinds_switch_topic);
+    client.subscribe(ac_ir_topic);
+    client.subscribe(main_ir_topic);
   } else {
     Serial.print("failed, rc=");
     Serial.print(client.state());
