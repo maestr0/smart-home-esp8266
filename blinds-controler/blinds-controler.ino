@@ -10,7 +10,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <IRsend.h>
-#include "IRController.h"
+#include <Servo.h>
 
 ////**********START CUSTOM PARAMS******************//
 
@@ -28,7 +28,7 @@ const char* update_password = "secret";
 #define POSITION_LED D4
 
 
-//Define MQTT Params. If you don't need to 
+//Define MQTT Params. If you don't need to
 #define mqtt_server "192.168.0.6"
 
 #define blinds_status_topic "livingroom/blinds/status"
@@ -40,14 +40,14 @@ const char* update_password = "secret";
 #define ac_ir_topic "livingroom/ac_ir/switch"
 #define main_ir_topic "livingroom/main_ir/switch"
 
-const char* mqtt_user = ""; 
+const char* mqtt_user = "";
 const char* mqtt_pass = "";
 
 //************END CUSTOM PARAMS********************//
 //This can be used to output the date the code was compiled
 const char compile_date[] = __DATE__ " " __TIME__;
 
-//Setup the web server for http OTA updates. 
+//Setup the web server for http OTA updates.
 ESP8266WebServer httpServer(80);
 ESP8266HTTPUpdateServer httpUpdater;
 
@@ -84,7 +84,7 @@ long lastMsgTempAndHumidity = 0;
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
 
-// Pass our oneWire reference to Dallas Temperature. 
+// Pass our oneWire reference to Dallas Temperature.
 DallasTemperature sensors(&oneWire);
 
 // arrays to hold device address
@@ -95,6 +95,9 @@ DeviceAddress insideThermometer;
 int blinds_position = 0;
 int lastBlindsStatusUpdate = 0;
 int lastBlindsState = 0;
+boolean blindsChanging = false;
+Servo servo;
+
 
 // light level
 int lastMsgLightLevel = 0;
@@ -115,15 +118,16 @@ void setup() {
   Serial.print("Temperature = ");
   Serial.print(bmp.readTemperature());
   Serial.println(" °C");
-  
+
   // IR
   irsend.begin();
 
   // blinds position sensor
   pinMode(POSITION_LED, OUTPUT);  // set onboard LED as output
   pinMode(POSITION_SENSOR, INPUT_PULLUP);      // set pin as input
-  
-    //Set the wifi config portal to only show for 3 minutes, then continue.
+  servo.attach(D7);
+
+  //Set the wifi config portal to only show for 3 minutes, then continue.
   wifiManager.setConfigPortalTimeout(180);
   wifiManager.autoConnect(host);
 
@@ -142,8 +146,8 @@ void setup() {
   setupExternalTempSensor();
 }
 
-void setupExternalTempSensor(){
- 
+void setupExternalTempSensor() {
+
   Serial.println("Dallas Temperature IC Control Library Demo");
 
   // locate devices on the bus
@@ -154,10 +158,10 @@ void setupExternalTempSensor(){
   Serial.println(" devices.");
 
   // report parasite power requirements
-  Serial.print("Parasite power is: "); 
+  Serial.print("Parasite power is: ");
   if (sensors.isParasitePowerMode()) Serial.println("ON");
   else Serial.println("OFF");
-  
+
   // Assign address manually. The addresses below will beed to be changed
   // to valid device addresses on your bus. Device address can be retrieved
   // by using either oneWire.search(deviceAddress) or individually via
@@ -167,16 +171,16 @@ void setupExternalTempSensor(){
 
   // Method 1:
   // Search for devices on the bus and assign based on an index. Ideally,
-  // you would do this to initially discover addresses on the bus and then 
-  // use those addresses and manually assign them (see above) once you know 
+  // you would do this to initially discover addresses on the bus and then
+  // use those addresses and manually assign them (see above) once you know
   // the devices on your bus (and assuming they don't change).
-  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0"); 
-  
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0");
+
   // method 2: search()
   // search() looks for the next device. Returns 1 if a new address has been
-  // returned. A zero might mean that the bus is shorted, there are no devices, 
-  // or you have already retrieved all of them. It might be a good idea to 
-  // check the CRC to make sure you didn't get garbage. The order is 
+  // returned. A zero might mean that the bus is shorted, there are no devices,
+  // or you have already retrieved all of them. It might be a good idea to
+  // check the CRC to make sure you didn't get garbage. The order is
   // deterministic. You will always get the same devices in the same order
   //
   // Must be called before search()
@@ -191,9 +195,9 @@ void setupExternalTempSensor(){
 
   // set the resolution to 9 bit (Each Dallas/Maxim device is capable of several different resolutions)
   sensors.setResolution(insideThermometer, 9);
- 
+
   Serial.print("Device 0 Resolution: ");
-  Serial.print(sensors.getResolution(insideThermometer), DEC); 
+  Serial.print(sensors.getResolution(insideThermometer), DEC);
   Serial.println();
 }
 
@@ -210,131 +214,124 @@ void loop() {
   httpServer.handleClient(); //handles requests for the firmware update page
 }
 
-void checkLightLevel(){
+void checkLightLevel() {
   //pub every minute, regardless of a change.
   long now = millis();
   if (now - lastMsgLightLevel > 10000) {
-    lastMsgLightLevel = now;        
-    float ll = analogRead(A0);    
+    lastMsgLightLevel = now;
+    float ll = analogRead(A0);
     String t3 = String(ll);
-    char tmp3[sizeof(t3)];    
-    t3.toCharArray(tmp3,sizeof(tmp3));
-    client.publish(light_level_topic, tmp3);  
+    char tmp3[sizeof(t3)];
+    t3.toCharArray(tmp3, sizeof(tmp3));
+    client.publish(light_level_topic, tmp3);
   }
 }
 
-void checkBlindsPosition(){
-  blinds_position = digitalRead(POSITION_SENSOR);  
-  if(lastBlindsState!=blinds_position) {    
+void checkBlindsPosition() {
+  blinds_position = digitalRead(POSITION_SENSOR);
+  if (lastBlindsState != blinds_position) {
     lastBlindsState = blinds_position;
-    digitalWrite(POSITION_LED, blinds_position);  
+    digitalWrite(POSITION_LED, blinds_position);
     long now = millis();
     // update MQTT every 500ms in order to get stable sensor readings
-    if (now - lastBlindsStatusUpdate > 500) {
-      lastBlindsStatusUpdate = now;           
-      if(blinds_position == 1) {
+    if (now - lastBlindsStatusUpdate > 500 && blindsChanging) {
+      lastBlindsStatusUpdate = now;
+      if (blinds_position == 1) {
+        blindsGoStop();
+        blindsChanging = false;
         client.publish(blinds_status_topic, "CLOSED");
       } else {
+        blindsGoUp(); // for another 2s TODO
         client.publish(blinds_status_topic, "OPEN");
       }
     }
   }
+
+  
 }
 
-void callback(char* topic, byte* payload, unsigned int length) {  
+void callback(char* topic, byte* payload, unsigned int length) {
   payload[length] = '\0';
   strTopic = String((char*)topic);
   Serial.print("Mqtt topic "); Serial.println(strTopic);
   if (strTopic == blinds_switch_topic)
   {
-    blinds = String((char*)payload);
-    if (blinds == "OPEN")
-    {      
-      Serial.println("Opening blinds ...");
+    if (blindsChanging) {
+      Serial.println("Ignoring blinds status updates. Blinds position changing...");
     } else {
-      Serial.print("Closing blinds...");
+      blinds = String((char*)payload);
+      blindsChanging = true;
+      blindsChanging = true;
+      if (blinds == "OPEN")
+      {
+        Serial.println("Opening blinds ...");
+        blindsGoDown(); // fixme
+      } else {
+        Serial.print("Closing blinds...");
+        blindsGoDown();
       }
+    }
   } else if (strTopic == ac_ir_topic) {
     acIr = String((char*)payload);
     if (acIr == "SWITCH")
-    {      
+    {
       Serial.println("AC switch ...");
       irsendAc.sendNEC(0x10AF8877, 32);
-    } 
+    }
   } else if (strTopic == main_ir_topic) {
     acIr = String((char*)payload);
-    if (acIr == "SPEAKER_BT") {      
+    if (acIr == "SPEAKER_BT") {
       Serial.println("SPEAKER BT");
       irsend.sendNEC(0x8E7B24D, 32);
-    } else if (acIr == "SPEAKER_LINE_IN") {      
+    } else if (acIr == "SPEAKER_LINE_IN") {
       Serial.println("SPEAKER_LINE_IN");
       irsend.sendNEC(0x8E77A85, 32);
-    } else if (acIr == "SPEAKER_VOLUME_UP") {      
+    } else if (acIr == "SPEAKER_VOLUME_UP") {
       Serial.println("SPEAKER_VOLUME_UP");
       irsend.sendNEC(0x8E7D42B, 32);
-    } else if (acIr == "SPEAKER_VOLUME_DOWN") {      
+    } else if (acIr == "SPEAKER_VOLUME_DOWN") {
       Serial.println("SPEAKER_VOLUME_DOWN");
       irsend.sendNEC(0x8E73CC3, 32);
-    } else if (acIr == "SPEAKER_MUTE") {      
+    } else if (acIr == "SPEAKER_MUTE") {
       Serial.println("SPEAKER_MUTE");
       irsend.sendNEC(0x8E758A7, 32);
-    } else if (acIr == "TV_SWITCH") {      
+    } else if (acIr == "TV_SWITCH") {
       Serial.println("TV_SWITCH");
       irsend.sendSAMSUNG(0xE0E040BF, 32);
-    } 
+    }
   }
 }
-
-//void checkBlindsState() {
-//  //Checks if the door state has changed, and MQTT pub the change
-//  last_state = door_state; //get previous state of door
-//  if (digitalRead(DOOR_PIN) == 0) // get new state of door
-//    door_state = "OPENED";
-//  else if (digitalRead(DOOR_PIN) == 1)
-//    door_state = "CLOSED"; 
-//
-//  if (last_state != door_state) { // if the state has changed then publish the change
-//    client.publish(door_topic, door_state);
-//    Serial.println(door_state);
-//  }
-//  //pub every minute, regardless of a change.
-//  long now = millis();
-//  if (now - lastMsg > 60000) {
-//    lastMsg = now;
-//    client.publish(door_topic, door_state);
-//  }
-//}
 
 void checkTempAndPressure() {
   //pub every minute, regardless of a change.
   long now = millis();
   if (now - lastMsgTempAndHumidity > 10000) {
-    lastMsgTempAndHumidity = now;        
+    lastMsgTempAndHumidity = now;
 
     float t = bmp.readTemperature();
-    if(t > 0 && t < 40) {
+    if (t > 0 && t < 40) {
       String t1 = String(t);
-      char tmp1[sizeof(t1)];    
-      t1.toCharArray(tmp1,sizeof(tmp1));
+      char tmp1[sizeof(t1)];
+      t1.toCharArray(tmp1, sizeof(tmp1));
       client.publish(temp_inside_topic, tmp1);
     }
-    
+
     float p = bmp.readPressure() / 100.0;
-    if(p < 1032 && p > 980) {
+    if (p < 1032 && p > 980) {
       String t2 = String(p);
-      char tmp2[sizeof(t2)];    
-      t2.toCharArray(tmp2,sizeof(tmp2));
+      char tmp2[sizeof(t2)];
+      t2.toCharArray(tmp2, sizeof(tmp2));
       client.publish(air_pressure_topic, tmp2);
     }
-  
+
     sensors.requestTemperatures();
     float to = sensors.getTempC(insideThermometer);
-    if(to < 100 && to > -30) {
+    if (to < 100 && to > -30) {
       String t3 = String(to);
-      char tmp3[sizeof(t3)];    
-      t3.toCharArray(tmp3,sizeof(tmp3));
+      char tmp3[sizeof(t3)];
+      t3.toCharArray(tmp3, sizeof(tmp3));
       client.publish(temp_outside_topic, tmp3);
-    }  
+    }
   }
 }
 
@@ -354,6 +351,18 @@ void reconnect() {
     // Wait 5 seconds before retrying
     delay(5000);
   }
+}
+
+void blindsGoDown() {
+  servo.write(10);
+}
+
+void blindsGoUp() {
+  servo.write(140);
+}
+
+void blindsGoStop() {
+  servo.write(90);
 }
 
 // function to print a device address
