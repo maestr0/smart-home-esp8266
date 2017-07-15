@@ -100,7 +100,8 @@ int lastBlindsState = 0;
 int lastMsgLightLevel = 0;
 
 // IR
-IRsend irsend(D8);
+IRsend irsend(D6);
+IRsend irsendAc(D8);
 
 void setup() {
 
@@ -258,7 +259,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if (acIr == "SWITCH")
     {      
       Serial.println("AC switch ...");
-      irsend.sendNEC(0x10AF8877, 32);
+      irsendAc.sendNEC(0x10AF8877, 32);
     } 
   } else if (strTopic == main_ir_topic) {
     acIr = String((char*)payload);
