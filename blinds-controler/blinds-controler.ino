@@ -121,6 +121,7 @@ void setup() {
 
   // IR
   irsend.begin();
+  irsendAc.begin();
 
   // blinds position sensor
   pinMode(POSITION_LED, OUTPUT);  // set onboard LED as output
@@ -153,6 +154,7 @@ void setupExternalTempSensor() {
   // locate devices on the bus
   Serial.print("Locating devices...");
   sensors.begin();
+  blindsGoStop();
   Serial.print("Found ");
   Serial.print(sensors.getDeviceCount(), DEC);
   Serial.println(" devices.");
