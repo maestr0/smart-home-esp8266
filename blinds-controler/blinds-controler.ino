@@ -93,8 +93,10 @@ DeviceAddress insideThermometer;
 
 // blinds position sensor
 int blinds_position = 0;
+int blinds_update_start_time = 0;
 int lastBlindsStatusUpdate = 0;
 int lastBlindsState = 0;
+int BLINDS_POSITION_CHANGE_DURATION = 8000;
 boolean blindsChanging = false;
 Servo servo;
 
@@ -208,7 +210,6 @@ void loop() {
   if (!client.connected()) {
     reconnect();
   }
-  //checkBlindsState();
   checkTempAndPressure();
   checkBlindsPosition();
   checkLightLevel();
@@ -230,28 +231,31 @@ void checkLightLevel() {
 }
 
 void checkBlindsPosition() {
-  blinds_position = digitalRead(POSITION_SENSOR);
-  if (lastBlindsState != blinds_position) {
-    lastBlindsState = blinds_position;
-    digitalWrite(POSITION_LED, blinds_position);
-    long now = millis();
-    // update MQTT every 500ms in order to get stable sensor readings
-    if (now - lastBlindsStatusUpdate > 500 && blindsChanging) {
-      lastBlindsStatusUpdate = now;
-      if (blinds_position == 1) {
-        blindsGoStop();
-        blindsChanging = false;
-        client.publish(blinds_status_topic, "CLOSED");
-      } else {
-        blindsGoUp(); // for another 2s TODO
-        client.publish(blinds_status_topic, "OPEN");
-      }
+
+  if ( blindsChanging && blinds_update_start_time + BLINDS_POSITION_CHANGE_DURATION < millis()) {
+    if (blinds_position == 1) {
+      blinds_position = 0;
+      client.publish(blinds_status_topic, "CLOSED");
+    } else {
+      blinds_position = 1;
+      client.publish(blinds_status_topic, "OPEN");
     }
+    blindsGoStop();
   }
 
-  
+
+  //  if (lastBlindsState != blinds_position) {
+  //    lastBlindsState = blinds_position;
+  //    digitalWrite(POSITION_LED, blinds_position);
+  //    long now = millis();
+  //    // update MQTT every 500ms in order to get stable sensor readings
+  //    if (now - lastBlindsStatusUpdate > 500 && blindsChanging) {
+  //      lastBlindsStatusUpdate = now;
+  //
+  //    }
 }
 
+// MQTT actions
 void callback(char* topic, byte* payload, unsigned int length) {
   payload[length] = '\0';
   strTopic = String((char*)topic);
@@ -261,16 +265,13 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if (blindsChanging) {
       Serial.println("Ignoring blinds status updates. Blinds position changing...");
     } else {
-      blinds = String((char*)payload);
-      blindsChanging = true;
-      blindsChanging = true;
-      if (blinds == "OPEN")
-      {
-        Serial.println("Opening blinds ...");
-        blindsGoDown(); // fixme
+      blinds = String((char*)payload);      
+      if (blinds == "OPEN" && blinds_position == 0) {
+        blindsOpen();
+      } else if (blinds == "CLOSED" && blinds_position == 1) {
+        blindsClose();
       } else {
         Serial.print("Closing blinds...");
-        blindsGoDown();
       }
     }
   } else if (strTopic == ac_ir_topic) {
@@ -355,16 +356,25 @@ void reconnect() {
   }
 }
 
-void blindsGoDown() {
+void blindsClose() {
+  blindsChanging = true;
+  Serial.println("Closing blinds...");
+  blinds_update_start_time = millis();
   servo.write(10);
 }
 
-void blindsGoUp() {
+void blindsOpen() {
+  blindsChanging = true;
+  Serial.println("Opening blinds...");
+  blinds_update_start_time = millis();
   servo.write(140);
 }
 
 void blindsGoStop() {
-  servo.write(90);
+  Serial.println("Stop blinds...");
+  blinds_update_start_time = 0; // no need to reset this value though
+  blindsChanging = false;
+  servo.write(91);
 }
 
 // function to print a device address
