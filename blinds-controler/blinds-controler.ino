@@ -38,6 +38,7 @@ const char* update_password = "secret";
 #define light_level_topic "livingroom/light-level"
 #define temp_outside_topic "livingroom/temperature-outside"
 #define ac_ir_topic "livingroom/ac_ir/switch"
+#define ac_ir_status_topic "livingroom/ac_ir/status"
 #define main_ir_topic "livingroom/main_ir/switch"
 
 const char* mqtt_user = "";
@@ -60,6 +61,9 @@ PubSubClient client(espClient);
 String blinds;
 String acIr;
 String mainIr;
+
+// AC
+boolean acStatus = false;
 
 String strTopic;
 String strPayload;
@@ -96,8 +100,10 @@ int blinds_position = 0;
 int blinds_update_start_time = 0;
 int lastBlindsStatusUpdate = 0;
 int lastBlindsState = 0;
-int BLINDS_POSITION_CHANGE_DURATION = 8000;
+int BLINDS_POSITION_CHANGE_DURATION_OPEN_CLOSE = 11000;
+int BLINDS_POSITION_CHANGE_DURATION_CLOSE_OPEN = 8000;
 boolean blindsChanging = false;
+int blinds_timeout = 0;
 Servo servo;
 
 
@@ -147,6 +153,7 @@ void setup() {
   Serial.printf("HTTPUpdateServer ready! Open http://%s.local%s in your browser and login with username '%s' and your password\n", host, update_path, update_username);
 
   setupExternalTempSensor();
+  blindsGoStop();
 }
 
 void setupExternalTempSensor() {
@@ -156,7 +163,6 @@ void setupExternalTempSensor() {
   // locate devices on the bus
   Serial.print("Locating devices...");
   sensors.begin();
-  blindsGoStop();
   Serial.print("Found ");
   Serial.print(sensors.getDeviceCount(), DEC);
   Serial.println(" devices.");
@@ -231,16 +237,25 @@ void checkLightLevel() {
 }
 
 void checkBlindsPosition() {
-
-  if ( blindsChanging && blinds_update_start_time + BLINDS_POSITION_CHANGE_DURATION < millis()) {
+  if (blindsChanging) {
     if (blinds_position == 1) {
-      blinds_position = 0;
-      client.publish(blinds_status_topic, "CLOSED");
+      blinds_timeout = blinds_update_start_time + BLINDS_POSITION_CHANGE_DURATION_OPEN_CLOSE;
     } else {
-      blinds_position = 1;
-      client.publish(blinds_status_topic, "OPEN");
+      blinds_timeout = blinds_update_start_time + BLINDS_POSITION_CHANGE_DURATION_CLOSE_OPEN;
     }
-    blindsGoStop();
+
+
+    if (blinds_timeout < millis()) {
+      if (blinds_position == 1) {
+        blinds_position = 0;
+        client.publish(blinds_status_topic, "CLOSED");
+      } else {
+        blinds_position = 1;
+        client.publish(blinds_status_topic, "OPEN");
+      }
+      // STOP
+      blindsGoStop();
+    }
   }
 
 
@@ -265,7 +280,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if (blindsChanging) {
       Serial.println("Ignoring blinds status updates. Blinds position changing...");
     } else {
-      blinds = String((char*)payload);      
+      blinds = String((char*)payload);
       if (blinds == "OPEN" && blinds_position == 0) {
         blindsOpen();
       } else if (blinds == "CLOSED" && blinds_position == 1) {
@@ -279,6 +294,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
     if (acIr == "SWITCH")
     {
       Serial.println("AC switch ...");
+      acStatus = !acStatus;
+      client.publish(ac_ir_status_topic, acStatus ? "ON" : "OFF");
       irsendAc.sendNEC(0x10AF8877, 32);
     }
   } else if (strTopic == main_ir_topic) {
