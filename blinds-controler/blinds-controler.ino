@@ -12,6 +12,23 @@
 #include <IRsend.h>
 #include <Servo.h>
 
+#include <WiFiUdp.h>
+#include <functional>
+#include <Switch.h>
+#include "UpnpBroadcastResponder.h"
+#include "CallbackFunction.h"
+
+// *** UPnP
+
+UpnpBroadcastResponder upnpBroadcastResponder;
+Switch *acUnitSwitch = NULL;
+Switch *blindsSwitch = NULL;
+//on/off callbacks
+void acOff();
+void acOn();
+void blindsOpen();
+void blindsClose();
+
 ////**********START CUSTOM PARAMS******************//
 
 //Define parameters for the http firmware update
@@ -96,7 +113,7 @@ DeviceAddress insideThermometer;
 
 
 // blinds position sensor
-int blinds_position = 0;
+int blinds_position = 0; // 0 = open, 1 = close
 int blinds_update_start_time = 0;
 int lastBlindsStatusUpdate = 0;
 int lastBlindsState = 0;
@@ -154,61 +171,20 @@ void setup() {
 
   setupExternalTempSensor();
   blindsGoStop();
+  startUPnP();
 }
 
-void setupExternalTempSensor() {
+void startUPnP() {
+  upnpBroadcastResponder.beginUdpMulticast();
 
-  Serial.println("Dallas Temperature IC Control Library Demo");
+  // Define your switches here. Max 14
+  // Format: Alexa invocation name, local port no, on callback, off callback
+  acUnitSwitch = new Switch("AC", 81, acOn, acOff);
+  blindsSwitch = new Switch("blinds", 82, blindsOpen, blindsClose);
 
-  // locate devices on the bus
-  Serial.print("Locating devices...");
-  sensors.begin();
-  Serial.print("Found ");
-  Serial.print(sensors.getDeviceCount(), DEC);
-  Serial.println(" devices.");
-
-  // report parasite power requirements
-  Serial.print("Parasite power is: ");
-  if (sensors.isParasitePowerMode()) Serial.println("ON");
-  else Serial.println("OFF");
-
-  // Assign address manually. The addresses below will beed to be changed
-  // to valid device addresses on your bus. Device address can be retrieved
-  // by using either oneWire.search(deviceAddress) or individually via
-  // sensors.getAddress(deviceAddress, index)
-  // Note that you will need to use your specific address here
-  //insideThermometer = { 0x28, 0x1D, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 };
-
-  // Method 1:
-  // Search for devices on the bus and assign based on an index. Ideally,
-  // you would do this to initially discover addresses on the bus and then
-  // use those addresses and manually assign them (see above) once you know
-  // the devices on your bus (and assuming they don't change).
-  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0");
-
-  // method 2: search()
-  // search() looks for the next device. Returns 1 if a new address has been
-  // returned. A zero might mean that the bus is shorted, there are no devices,
-  // or you have already retrieved all of them. It might be a good idea to
-  // check the CRC to make sure you didn't get garbage. The order is
-  // deterministic. You will always get the same devices in the same order
-  //
-  // Must be called before search()
-  //oneWire.reset_search();
-  // assigns the first address found to insideThermometer
-  //if (!oneWire.search(insideThermometer)) Serial.println("Unable to find address for insideThermometer");
-
-  // show the addresses we found on the bus
-  Serial.print("Device 0 Address: ");
-  printAddress(insideThermometer);
-  Serial.println();
-
-  // set the resolution to 9 bit (Each Dallas/Maxim device is capable of several different resolutions)
-  sensors.setResolution(insideThermometer, 9);
-
-  Serial.print("Device 0 Resolution: ");
-  Serial.print(sensors.getResolution(insideThermometer), DEC);
-  Serial.println();
+  Serial.println("Adding switches upnp broadcast responder");
+  upnpBroadcastResponder.addDevice(*acUnitSwitch);
+  upnpBroadcastResponder.addDevice(*blindsSwitch);
 }
 
 void loop() {
@@ -221,6 +197,10 @@ void loop() {
   checkLightLevel();
   client.loop(); //the mqtt function that processes MQTT messages
   httpServer.handleClient(); //handles requests for the firmware update page
+
+  upnpBroadcastResponder.serverLoop();
+  blindsSwitch->serverLoop();
+  acUnitSwitch->serverLoop();
 }
 
 void checkLightLevel() {
@@ -244,7 +224,6 @@ void checkBlindsPosition() {
       blinds_timeout = blinds_update_start_time + BLINDS_POSITION_CHANGE_DURATION_CLOSE_OPEN;
     }
 
-
     if (blinds_timeout < millis()) {
       if (blinds_position == 1) {
         blinds_position = 0;
@@ -257,17 +236,6 @@ void checkBlindsPosition() {
       blindsGoStop();
     }
   }
-
-
-  //  if (lastBlindsState != blinds_position) {
-  //    lastBlindsState = blinds_position;
-  //    digitalWrite(POSITION_LED, blinds_position);
-  //    long now = millis();
-  //    // update MQTT every 500ms in order to get stable sensor readings
-  //    if (now - lastBlindsStatusUpdate > 500 && blindsChanging) {
-  //      lastBlindsStatusUpdate = now;
-  //
-  //    }
 }
 
 // MQTT actions
@@ -286,17 +254,16 @@ void callback(char* topic, byte* payload, unsigned int length) {
       } else if (blinds == "CLOSED" && blinds_position == 1) {
         blindsClose();
       } else {
-        Serial.print("Closing blinds...");
+        Serial.print("Still closing blinds...");
       }
     }
   } else if (strTopic == ac_ir_topic) {
     acIr = String((char*)payload);
-    if (acIr == "SWITCH")
+    if (acIr == "ON")
     {
-      Serial.println("AC switch ...");
-      acStatus = !acStatus;
-      client.publish(ac_ir_status_topic, acStatus ? "ON" : "OFF");
-      irsendAc.sendNEC(0x10AF8877, 32);
+      acOn();
+    } else {
+      acOff();
     }
   } else if (strTopic == main_ir_topic) {
     acIr = String((char*)payload);
@@ -319,6 +286,26 @@ void callback(char* topic, byte* payload, unsigned int length) {
       Serial.println("TV_SWITCH");
       irsend.sendSAMSUNG(0xE0E040BF, 32);
     }
+  }
+}
+
+void acOff() {
+  if (acStatus) {
+    acSwitch();
+  }
+}
+
+void acSwitch() {
+  Serial.println("AC switch ...");
+  acStatus = !acStatus;
+  client.publish(ac_ir_status_topic, acStatus ? "ON" : "OFF");
+  irsendAc.sendNEC(0x10AF8877, 32);
+}
+
+void acOn() {
+  Serial.println("AC switch ...");
+  if (!acStatus) {
+    acSwitch();
   }
 }
 
@@ -374,17 +361,21 @@ void reconnect() {
 }
 
 void blindsClose() {
-  blindsChanging = true;
-  Serial.println("Closing blinds...");
-  blinds_update_start_time = millis();
-  servo.write(10);
+  if (blinds_position == 1) {
+    blindsChanging = true;
+    Serial.println("Closing blinds...");
+    blinds_update_start_time = millis();
+    servo.write(10);
+  }
 }
 
 void blindsOpen() {
-  blindsChanging = true;
-  Serial.println("Opening blinds...");
-  blinds_update_start_time = millis();
-  servo.write(140);
+  if (blinds_position == 0) {
+    blindsChanging = true;
+    Serial.println("Opening blinds...");
+    blinds_update_start_time = millis();
+    servo.write(140);
+  }
 }
 
 void blindsGoStop() {
@@ -418,4 +409,59 @@ void printTemperature(DeviceAddress deviceAddress)
   Serial.print(tempC);
   Serial.print(" Temp F: ");
   Serial.println(DallasTemperature::toFahrenheit(tempC)); // Converts tempC to Fahrenheit
+}
+
+void setupExternalTempSensor() {
+
+  Serial.println("Dallas Temperature IC Control Library Demo");
+
+  // locate devices on the bus
+  Serial.print("Locating devices...");
+  sensors.begin();
+  Serial.print("Found ");
+  Serial.print(sensors.getDeviceCount(), DEC);
+  Serial.println(" devices.");
+
+  // report parasite power requirements
+  Serial.print("Parasite power is: ");
+  if (sensors.isParasitePowerMode()) Serial.println("ON");
+  else Serial.println("OFF");
+
+  // Assign address manually. The addresses below will beed to be changed
+  // to valid device addresses on your bus. Device address can be retrieved
+  // by using either oneWire.search(deviceAddress) or individually via
+  // sensors.getAddress(deviceAddress, index)
+  // Note that you will need to use your specific address here
+  //insideThermometer = { 0x28, 0x1D, 0x39, 0x31, 0x2, 0x0, 0x0, 0xF0 };
+
+  // Method 1:
+  // Search for devices on the bus and assign based on an index. Ideally,
+  // you would do this to initially discover addresses on the bus and then
+  // use those addresses and manually assign them (see above) once you know
+  // the devices on your bus (and assuming they don't change).
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0");
+
+  // method 2: search()
+  // search() looks for the next device. Returns 1 if a new address has been
+  // returned. A zero might mean that the bus is shorted, there are no devices,
+  // or you have already retrieved all of them. It might be a good idea to
+  // check the CRC to make sure you didn't get garbage. The order is
+  // deterministic. You will always get the same devices in the same order
+  //
+  // Must be called before search()
+  //oneWire.reset_search();
+  // assigns the first address found to insideThermometer
+  //if (!oneWire.search(insideThermometer)) Serial.println("Unable to find address for insideThermometer");
+
+  // show the addresses we found on the bus
+  Serial.print("Device 0 Address: ");
+  printAddress(insideThermometer);
+  Serial.println();
+
+  // set the resolution to 9 bit (Each Dallas/Maxim device is capable of several different resolutions)
+  sensors.setResolution(insideThermometer, 9);
+
+  Serial.print("Device 0 Resolution: ");
+  Serial.print(sensors.getResolution(insideThermometer), DEC);
+  Serial.println();
 }
